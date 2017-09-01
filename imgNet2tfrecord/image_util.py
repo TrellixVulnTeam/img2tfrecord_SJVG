@@ -275,7 +275,8 @@ def _process_image_files_batch(coder, thread_index, ranges, dataset):
             except Exception as e:
                 print(e)
                 print('SKIPPED: Unexpected eror while decoding %s.' % filename)
-                continue
+                # continue
+                raise ValueError('Invalid encoding.')
 
             example = _convert_to_example(filename, image_buffer, label,
                                           text, human, bbox, height, width)

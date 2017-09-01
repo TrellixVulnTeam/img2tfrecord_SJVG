@@ -171,7 +171,7 @@ def run(labels_dir, labels, bounding_box_file):
 
     # labels = set([l.strip() for l in open(labels_file).readlines()])
     print('Identified %d synset IDs' % (len(labels)))
-    assert labels is not None and len(labels) > 1
+    assert labels is not None and len(labels) > 0
 
     skipped_boxes = 0
     skipped_files = 0

@@ -1,10 +1,10 @@
 #
 # build_data
-# ml.data
+# imgNet2tfrecord
 #
 
 """
-Script for building image data
+Main Script for building image data
 """
 
 from __future__ import absolute_import
@@ -22,36 +22,14 @@ import tensorflow as tf
 
 from imgNet2tfrecord import image_util
 from imgNet2tfrecord import process_bounding_boxes
+from imgNet2tfrecord import flags
 
 if sys.version_info >= (3,):
     from urllib import request as urllib2
 
-# Data and build paths
-tf.app.flags.DEFINE_string('raw_data_dir', '../data/raw_data', 'Raw data directory, location where synset files and bounding boxes are downloaded to.')
-tf.app.flags.DEFINE_string('build_dir', '../data/data', 'Output data directory, where the build TFRecord files are saved.')
-tf.app.flags.DEFINE_string('labels_dir', '../data/data/Annotation', 'Labels root directory. Contains xml files for synset.')
+FLAGS = flags.get_flags()
 
-# Utility file locations
-tf.app.flags.DEFINE_string('download_list', '../etc/list.csv', 'Image-net synsets to download and use')
-tf.app.flags.DEFINE_string('labels_file', '../etc/synset.txt', 'Labels file')
-tf.app.flags.DEFINE_string('imagenet_metadata_file', '../etc/imagenet_metadata.txt', 'ImageNet metadata file')
-tf.app.flags.DEFINE_string('bounding_box_file', '../etc/bounding_boxes.csv', 'Bounding boxes file.')
-
-# Build configurations
-tf.app.flags.DEFINE_integer('train_shards', 90, 'Number of shards in training TFRecord files.')
-tf.app.flags.DEFINE_integer('validation_shards', 10, 'Number of shards in validation TFRecord files.')
-tf.app.flags.DEFINE_integer('num_threads', 2, 'Number of threads to preprocess the images.')
-
-# ImageNet credentials
-tf.app.flags.DEFINE_string('user', 'eskil', 'ImageNet username')
-tf.app.flags.DEFINE_string(
-    'access_pass', 'ed5ac67a10f56ba081f6735886b92d39959692e1',
-    'ImageNet access pass. (Keep secret - for personal use only).')
-
-FLAGS = tf.app.flags.FLAGS
-
-# USER_ID = 'eskil'
-# ACCESS_PASS = os.environ.get('IMAGENET_PASS')
+# URL CONSTANTS
 SYNSET_URL = 'http://www.image-net.org/download/synset?wnid={}&username={}&accesskey={}&release=latest&src=stanford'
 BBOX_URL = 'http://www.image-net.org/downloads/bbox/bbox/{}.tar.gz'
 
@@ -105,7 +83,7 @@ class UnpackInfo(object):
         return 'Info: {self.name}'.format(self=self)
 
 
-def _get_dl_urls(wnid, user, access_pass):
+def get_dl_urls(wnid, user, access_pass):
 
     """
     Returns download url for images and bounding boxes
@@ -118,19 +96,26 @@ def _get_dl_urls(wnid, user, access_pass):
     return [synset_url, bbox_url]
 
 
-def _maybe_download(dest_directory, download_list, user, access_pass):
-    """Download Image-net synsets from file"""
-
+def maybe_download(dest_directory, download_list, user, access_pass):
+    """
+    Download Image-net synsets and bounding boxes
+    :param str dest_directory : Path to build directory.
+    :param str download_list : Path to download list csv file.
+    :param str user: ImageNet username
+    :param str access_pass: ImageNet pass
+    """
     if not os.path.exists(dest_directory):
         os.makedirs(dest_directory)
 
+    assert os.path.exists(download_list), 'Download CSV file does not exist.'
+
+    # Parse CSV - download synsets and bounding boxes
     with open(download_list) as csvfile:
         list_reader = csv.reader(csvfile)
         for row in list_reader:
 
             wordnet_id = row[0]
-            # print(wordnet_id)
-            urls = _get_dl_urls(wordnet_id, user, access_pass)
+            urls = get_dl_urls(wordnet_id, user, access_pass)
             filenames = ['{}.tar'.format(wordnet_id), '{}.tar.gz'.format(wordnet_id)]
 
             for i, filename in enumerate(filenames):
@@ -139,21 +124,9 @@ def _maybe_download(dest_directory, download_list, user, access_pass):
                 if not os.path.exists(filepath):
                     download_file(urls[i], filepath)
 
+                # If last row is 0, don't download bounding boxes
                 if row[2] == '0':
                     break
-
-    # wnids = tf.gfile.FastGFile(download_list, 'r').readlines()
-    # wnids = [x.strip() for x in wnids]
-    # for wordnet_ID in wnids:
-    #
-    #     urls = _get_dl_urls(wordnet_ID)
-    #     filenames = ['{}.tar'.format(wordnet_ID), '{}.tar.gz'.format(wordnet_ID)]
-    #
-    #     for i, filename in enumerate(filenames):
-    #         filepath = os.path.join(dest_directory, filename)
-    #
-    #         if not os.path.exists(filepath):
-    #             download_file(urls[i], filepath)
 
 
 def download_file(url, filename):
@@ -184,12 +157,12 @@ def download_file(url, filename):
             status += chr(13)
 
 
-def _write_synsets_file(synsets):
+def write_synsets_file(synsets):
     with open(FLAGS.labels_file, 'w') as f:
         f.write('\n'.join(synsets))
 
 
-def _unpack_data(data_dir, output_dir):
+def unpack_data(data_dir, output_dir):
     """Unpack and split raw data into training and validation sets."""
     synset_labels = []
     label = 0
@@ -200,14 +173,20 @@ def _unpack_data(data_dir, output_dir):
     tar_format = '%s/*.tar' % data_dir
     data_files = tf.gfile.Glob(tar_format)
 
+    print('Unpacking raw data FROM: {} TO: {}'.format(data_dir, output_dir))
+
     for file in data_files:
-        filename = file.split('.')[0].split('/')[-1]
+        filename = file.split('/')[-1].split('.tar')[0]
+        assert isinstance(filename, str) and len(filename) > 0
         synset_labels.append(filename)
         label += 1
 
         with tarfile.open(file) as tar:
-            path = '{}/{}/'.format(output_dir, filename)
+            path = '{}/{}'.format(output_dir, filename)
             names = np.array(tar.getnames(), dtype=str)
+            # noinspection PyTypeChecker
+            path_prefix = np.full_like(names, fill_value='/')
+            names = np.core.defchararray.add(path_prefix, names)
             # noinspection PyTypeChecker
             file_prefix = np.full_like(names, fill_value=path)
             names = np.core.defchararray.add(file_prefix, names)
@@ -227,12 +206,12 @@ def _unpack_data(data_dir, output_dir):
     train_data.shuffle_data()
     validation_data.shuffle_data()
 
-    _write_synsets_file(synset_labels)
+    write_synsets_file(synset_labels)
 
     return train_data, validation_data, synset_labels
 
 
-def _clean_temp_data(output_dir, u_labels):
+def clean_temp_data(output_dir, u_labels):
     # print(u_labels)
     for label in u_labels:
         shutil.rmtree('{}/{}'.format(output_dir, label))
@@ -247,11 +226,11 @@ def main(_):
     assert isinstance(FLAGS.user, str), 'Imagenet username must be provided.'
     assert isinstance(FLAGS.access_pass, str), 'Imagenet Access pass must be provided.'
 
-    # Check if raw data is downloaded
-    _maybe_download(FLAGS.raw_data_dir, FLAGS.download_list, FLAGS.user, FLAGS.access_pass)
+    # Check if raw data should be downloaded
+    maybe_download(FLAGS.raw_data_dir, FLAGS.download_list, FLAGS.user, FLAGS.access_pass)
 
     # Unpack raw data
-    train, valid, labels = _unpack_data(FLAGS.raw_data_dir, FLAGS.build_dir)
+    train, valid, labels = unpack_data(FLAGS.raw_data_dir, FLAGS.build_dir)
 
     # Process bounding boxes
     process_bounding_boxes.run(FLAGS.labels_dir, labels, FLAGS.bounding_box_file)
@@ -269,7 +248,7 @@ def main(_):
     image_util.process_image_files(valid, FLAGS.num_threads)
     #
     # # Clean temp JPEG files
-    _clean_temp_data(FLAGS.output_dir, labels)
+    clean_temp_data(FLAGS.build_dir, labels)
 
 
 if __name__ == '__main__':

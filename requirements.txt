@@ -1,4 +1,5 @@
 bleach==1.5.0
+coverage==4.4.1
 flake8==3.4.1
 html5lib==0.9999999
 Markdown==2.6.9
